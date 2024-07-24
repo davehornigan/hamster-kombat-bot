@@ -7,7 +7,7 @@ const (
 
 type Buy struct {
 	BoostId   string `json:"boostId"`
-	Timestamp int    `json:"timestamp"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func (r *Buy) IsRequest() bool {
@@ -28,4 +28,8 @@ type Boost struct {
 
 type BoostsForBuy struct {
 	Boosts []Boost `json:"boostsForBuy"`
+}
+
+func (r *BoostsForBuy) IsResponse() bool {
+	return true
 }
