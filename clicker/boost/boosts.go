@@ -1,10 +1,5 @@
 package boost
 
-import (
-	"fmt"
-	"github.com/dustin/go-humanize"
-)
-
 const (
 	ForBuyUri = "/boosts-for-buy"
 	BuyUri    = "/buy-boost"
@@ -37,17 +32,6 @@ type Boost struct {
 	MaxTapsDelta    int32 `json:"maxTapsDelta"`
 	EarnPerTapDelta int32 `json:"earnPerTapDelta"`
 	MaxLevel        int32 `json:"maxLevel,omitempty"`
-}
-
-func (r *Boost) Print() {
-	fmt.Printf(
-		"Boost: %s: %d lvl [Max %d] - Price: %s [Cooldown %d]\n",
-		r.Id,
-		r.Level,
-		r.MaxLevel,
-		humanize.Comma(r.Price),
-		r.CooldownSeconds,
-	)
 }
 
 type BoostsForBuy struct {

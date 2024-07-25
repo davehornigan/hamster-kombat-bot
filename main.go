@@ -6,76 +6,86 @@ import (
 	"github.com/davehornigan/hamster-kombat-bot/clicker"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/boost"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/upgrades"
+	"github.com/davehornigan/hamster-kombat-bot/view"
 	"github.com/dustin/go-humanize"
 	"log"
+	"os"
 	"time"
 )
 
 type Config struct {
-	AuthToken              string               `env:"AUTH_TOKEN"`
-	UserAgent              string               `env:"USER_AGENT" envDefault:"telegram:10.14.5"`
-	BuyUpgradesType        upgrades.UpgradeType `env:"BUY_UPGRADE" envDefault:"max-profit-per-coin"`
-	WantToBuyUpgrades      bool                 `env:"WANT_TO_BUY_UPGRADES" envDefault:"true"`
-	WantToBuyFullTapsBoost bool                 `env:"WANT_TO_BUY_FULL_TAPS" envDefault:"false"`
-	TapIfAvailableTaps     int32                `env:"TAP_IF_AVAILABLE_TAPS" envDefault:"200"`
+	AuthToken string `env:"AUTH_TOKEN"`
+	UserAgent string `env:"USER_AGENT" envDefault:"telegram:10.14.5"`
 }
 
 var clickerClient *clicker.Client
 var currentState *clicker.CurrentState
+var printer *view.Printer
 
 func init() {
 	cfg := &Config{}
 	if err := env.Parse(cfg); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%+v\n", cfg)
 	clickerClient = clicker.NewClient(cfg.AuthToken, cfg.UserAgent)
 	curTime := time.Now().Add(-120 * time.Second)
 	currentState = &clicker.CurrentState{
-		LastPrintState:         curTime.Unix(),
-		LastCheckUpgrades:      curTime.Unix(),
-		WantToBuyUpgrades:      cfg.WantToBuyUpgrades,
-		BuyUpgradesType:        cfg.BuyUpgradesType,
-		WantToBuyFullTapsBoost: cfg.WantToBuyFullTapsBoost,
-		TapIfAvailableTaps:     cfg.TapIfAvailableTaps,
+		LastCheckUpgrades:  curTime.Unix(),
+		BuyUpgradesType:    upgrades.None,
+		UseFullTapsBoost:   false,
+		TapIfAvailableTaps: 500,
 	}
+	printer = view.NewPrinter()
 }
 
 func main() {
-	defer handlePanic()
+	app := printer.InitApp(currentState)
+
+	go func() {
+		if err := app.Run(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}()
+
+	go func() {
+		for {
+			time.Sleep(1 * time.Second)
+			printer.UpdateDraw()
+		}
+	}()
 	clickerUser, err := clickerClient.Sync()
 	if err != nil {
 		log.Fatal(err)
 	}
 	currentState.Update(clickerUser)
-	go checkAndBuyUpgrades()
-	go BuyUpgrades()
-	go checkBoosts()
-	for {
-		curTime := time.Now()
-		currentState.AvailableTaps = currentState.AvailableTaps + (int32(curTime.Unix()-currentState.LastSyncUpdate) * currentState.TapsRecoverPerSec)
-		currentState.LastSyncUpdate = curTime.Unix()
-		if currentState.LastPrintState+30 < curTime.Unix() {
-			go currentState.Print()
-		}
-		fmt.Printf("Available %d taps\n", currentState.AvailableTaps)
-		if currentState.AvailableTaps >= currentState.TapIfAvailableTaps {
-			Tap()
+	checkUpgrades()
 
-			if currentState.WantToBuyFullTapsBoost {
-				BuyFullTapsBoost()
+	go func() {
+		go BuyUpgrades()
+		go checkBoosts()
+		for {
+			curTime := time.Now()
+			currentState.AvailableTaps = currentState.AvailableTaps + (int32(curTime.Unix()-currentState.LastSyncUpdate) * currentState.TapsRecoverPerSec)
+			currentState.LastSyncUpdate = curTime.Unix()
+			if currentState.AvailableTaps >= currentState.TapIfAvailableTaps {
 				Tap()
+
+				if currentState.UseFullTapsBoost {
+					BuyFullTapsBoost()
+				}
 			}
 		}
-		time.Sleep(3 * time.Second)
-	}
+	}()
+
+	select {}
 }
 
 func Tap() {
-	fmt.Printf("==> Sending %d taps\n", currentState.AvailableTaps)
+	printer.LogLine(fmt.Sprintf("Sending %d taps", currentState.AvailableTaps))
 	clickerUser, err := clickerClient.Tap(currentState.AvailableTaps, 0)
 	if err != nil {
-		fmt.Printf("Error sending taps: %v\n", err)
+		printer.LogLine(fmt.Sprintf("Error sending taps: %v\n", err))
 		return
 	}
 	currentState.Update(clickerUser)
@@ -89,6 +99,9 @@ func checkBoosts() {
 }
 
 func BuyFullTapsBoost() {
+	if currentState.BoostsForBuy == nil {
+		return
+	}
 	boostForBuy := currentState.BoostsForBuy[boost.FullTaps]
 
 	if boostForBuy.CooldownSeconds != 0 || boostForBuy.Level > boostForBuy.MaxLevel {
@@ -110,67 +123,61 @@ func BuyFullTapsBoost() {
 }
 
 func BuyUpgrades() {
-	if currentState.WantToBuyUpgrades {
-		for {
-			if currentState.InterestingUpgradesToBuy == nil {
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			if currentState.LastPrintState+30 < time.Now().Unix() {
-				res, err := clickerClient.CheckUpgrades()
-				if err != nil {
-					fmt.Printf("Error checking upgrades: %v\n", err)
-					return
-				}
-				currentState.InterestingUpgradesToBuy = res.GetInterestingUpgradesAvailableToBuy()
-				currentState.LastCheckUpgrades = time.Now().Unix()
-			}
-			var upgradeForBuy *upgrades.Upgrade
-			switch currentState.BuyUpgradesType {
-			case upgrades.MaxProfitPerCoin:
-				upgradeForBuy = currentState.InterestingUpgradesToBuy.MaxProfitPerCoin
-			case upgrades.MinCost:
-				upgradeForBuy = currentState.InterestingUpgradesToBuy.MinCost
-			case upgrades.MaxProfit:
-				upgradeForBuy = currentState.InterestingUpgradesToBuy.MaxProfit
-			default:
-				fmt.Println("No upgrades selected")
+	for {
+		if currentState.BuyUpgradesType == upgrades.None {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+		if currentState.InterestingUpgradesToBuy == nil {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		if currentState.LastCheckUpgrades+30 < time.Now().Unix() {
+			res, err := clickerClient.CheckUpgrades()
+			if err != nil {
+				printer.LogLine(fmt.Sprintf("Error checking upgrades: %v\n", err))
 				return
 			}
-			if currentState.Balance < upgradeForBuy.Price {
-				fmt.Printf("Insufficient funds for buy upgrade: %s\n", upgradeForBuy.Name)
-				time.Sleep(3 * time.Minute)
-				continue
-			}
-			if upgradeForBuy.CooldownSeconds > 0 {
-				fmt.Printf("Wait cooldown %d sec for buy upgrade: %s\n", upgradeForBuy.CooldownSeconds, upgradeForBuy.Name)
-				time.Sleep(time.Duration(upgradeForBuy.CooldownSeconds+1) * time.Second)
-			}
-			resp, err := clickerClient.BuyUpgrade(upgradeForBuy)
-			if err != nil {
-				fmt.Printf("Error buy upgrade: %s\n", err)
-				continue
-			}
-			currentState.InterestingUpgradesToBuy = resp.GetInterestingUpgradesAvailableToBuy()
-			currentState.Update(resp.User)
-			fmt.Printf("^^^ Upgraded %s to %d level by price: %s\n", upgradeForBuy.Name, upgradeForBuy.Level, humanize.Comma(upgradeForBuy.Price))
+			currentState.InterestingUpgradesToBuy = res.GetInterestingUpgradesAvailableToBuy()
+			currentState.LastCheckUpgrades = time.Now().Unix()
 		}
+		var upgradeForBuy *upgrades.Upgrade
+		switch currentState.BuyUpgradesType {
+		case upgrades.MaxProfitPerCoin:
+			upgradeForBuy = currentState.InterestingUpgradesToBuy.MaxProfitPerCoin
+		case upgrades.MinCost:
+			upgradeForBuy = currentState.InterestingUpgradesToBuy.MinCost
+		case upgrades.MaxProfit:
+			upgradeForBuy = currentState.InterestingUpgradesToBuy.MaxProfit
+		default:
+			return
+		}
+		if currentState.Balance < upgradeForBuy.Price {
+			printer.LogLine(fmt.Sprintf("Insufficient funds for buy upgrade \"%s\". Wait 3 min.", upgradeForBuy.Name))
+			time.Sleep(3 * time.Minute)
+			continue
+		}
+		if upgradeForBuy.CooldownSeconds > 0 {
+			printer.LogLine(fmt.Sprintf("Wait cooldown %d sec for buy upgrade \"%s\"", upgradeForBuy.CooldownSeconds, upgradeForBuy.Name))
+			time.Sleep(time.Duration(upgradeForBuy.CooldownSeconds+1) * time.Second)
+		}
+		resp, err := clickerClient.BuyUpgrade(upgradeForBuy)
+		if err != nil {
+			printer.LogLine(fmt.Sprintf("Error buy upgrade: %s\n", err))
+			continue
+		}
+		currentState.InterestingUpgradesToBuy = resp.GetInterestingUpgradesAvailableToBuy()
+		currentState.Update(resp.User)
+		printer.LogLine(fmt.Sprintf("Upgraded \"%s\" to %d level by price: %s", upgradeForBuy.Name, upgradeForBuy.Level, humanize.Comma(upgradeForBuy.Price)))
 	}
 }
 
-func checkAndBuyUpgrades() {
+func checkUpgrades() {
 	res, err := clickerClient.CheckUpgrades()
 	if err != nil {
-		fmt.Printf("Error checking upgrades: %v\n", err)
+		printer.LogLine(fmt.Sprintf("Error checking upgrades: %v", err))
 		return
 	}
 	currentState.InterestingUpgradesToBuy = res.GetInterestingUpgradesAvailableToBuy()
 	currentState.LastCheckUpgrades = time.Now().Unix()
-}
-
-func handlePanic() {
-	if err := recover(); err != nil {
-		fmt.Println(err)
-		main()
-	}
 }

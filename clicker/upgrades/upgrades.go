@@ -1,9 +1,7 @@
 package upgrades
 
 import (
-	"fmt"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/user"
-	"github.com/dustin/go-humanize"
 )
 
 const (
@@ -11,13 +9,13 @@ const (
 	BuyUri    = "/buy-upgrade"
 )
 
-type UpgradeType string
+type UpgradeType int
 
 const (
-	MaxProfitPerCoin UpgradeType = "max-profit-per-coin"
-	MinCost          UpgradeType = "min-cost"
-	MaxProfit        UpgradeType = "max-profit"
-	None             UpgradeType = "none"
+	MaxProfitPerCoin UpgradeType = iota
+	MinCost
+	MaxProfit
+	None
 )
 
 type InterestingUpgradesToBuy struct {
@@ -42,18 +40,6 @@ type Upgrade struct {
 
 func (r *Upgrade) CanBuy() bool {
 	return r.IsAvailable && !r.IsExpired
-}
-
-func (r *Upgrade) Print(title string) {
-	fmt.Printf(
-		"Upgrade: %s: %s > %s [%d lvl] - %s [+%s per hour]\n",
-		title,
-		r.Section,
-		r.Name,
-		r.Level,
-		humanize.Comma(r.Price),
-		humanize.Comma(r.ProfitPerHourDelta),
-	)
 }
 
 func (r *Upgrade) GetProfitPerCoin() float64 {

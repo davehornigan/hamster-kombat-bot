@@ -5,3 +5,5 @@
   - Max Profit
   - Max Profit Per Coin
 - Automatic use "Full energy" booster
+
+![screenshot](screenshot.png)
