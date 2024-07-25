@@ -4,36 +4,24 @@ import (
 	"fmt"
 	"github.com/caarlos0/env/v11"
 	"github.com/davehornigan/hamster-kombat-bot/clicker"
+	"github.com/davehornigan/hamster-kombat-bot/clicker/boost"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/upgrades"
-	"github.com/davehornigan/hamster-kombat-bot/clicker/user"
 	"github.com/dustin/go-humanize"
 	"log"
 	"time"
 )
 
 type Config struct {
-	AuthToken         string               `env:"AUTH_TOKEN"`
-	UserAgent         string               `env:"USER_AGENT" envDefault:"telegram:10.14.5"`
-	BuyUpgradesType   upgrades.UpgradeType `env:"BUY_UPGRADE" envDefault:"max-profit-per-coin"`
-	WantToBuyUpgrades bool                 `env:"WANT_TO_BUY_UPGRADES" envDefault:"true"`
+	AuthToken              string               `env:"AUTH_TOKEN"`
+	UserAgent              string               `env:"USER_AGENT" envDefault:"telegram:10.14.5"`
+	BuyUpgradesType        upgrades.UpgradeType `env:"BUY_UPGRADE" envDefault:"max-profit-per-coin"`
+	WantToBuyUpgrades      bool                 `env:"WANT_TO_BUY_UPGRADES" envDefault:"true"`
+	WantToBuyFullTapsBoost bool                 `env:"WANT_TO_BUY_FULL_TAPS" envDefault:"false"`
+	TapIfAvailableTaps     int32                `env:"TAP_IF_AVAILABLE_TAPS" envDefault:"200"`
 }
 
 var clickerClient *clicker.Client
-var currentState *CurrentState
-
-type CurrentState struct {
-	AvailableTaps            int32
-	MaxTaps                  int64
-	TapsRecoverPerSec        int32
-	Balance                  int64
-	Level                    int64
-	LastSyncUpdate           int64
-	LastPrintState           int64
-	LastCheckUpgrades        int64
-	InterestingUpgradesToBuy *upgrades.InterestingUpgradesToBuy
-	WantToBuyUpgrades        bool
-	BuyUpgradesType          upgrades.UpgradeType
-}
+var currentState *clicker.CurrentState
 
 func init() {
 	cfg := &Config{}
@@ -43,11 +31,13 @@ func init() {
 	fmt.Printf("%+v\n", cfg)
 	clickerClient = clicker.NewClient(cfg.AuthToken, cfg.UserAgent)
 	curTime := time.Now().Add(-120 * time.Second)
-	currentState = &CurrentState{
-		LastPrintState:    curTime.Unix(),
-		LastCheckUpgrades: curTime.Unix(),
-		WantToBuyUpgrades: cfg.WantToBuyUpgrades,
-		BuyUpgradesType:   cfg.BuyUpgradesType,
+	currentState = &clicker.CurrentState{
+		LastPrintState:         curTime.Unix(),
+		LastCheckUpgrades:      curTime.Unix(),
+		WantToBuyUpgrades:      cfg.WantToBuyUpgrades,
+		BuyUpgradesType:        cfg.BuyUpgradesType,
+		WantToBuyFullTapsBoost: cfg.WantToBuyFullTapsBoost,
+		TapIfAvailableTaps:     cfg.TapIfAvailableTaps,
 	}
 }
 
@@ -57,29 +47,65 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	updateState(clickerUser)
+	currentState.Update(clickerUser)
 	go checkAndBuyUpgrades()
 	go BuyUpgrades()
+	go checkBoosts()
 	for {
 		curTime := time.Now()
 		currentState.AvailableTaps = currentState.AvailableTaps + (int32(curTime.Unix()-currentState.LastSyncUpdate) * currentState.TapsRecoverPerSec)
 		currentState.LastSyncUpdate = curTime.Unix()
 		if currentState.LastPrintState+30 < curTime.Unix() {
-			go printState()
+			go currentState.Print()
 		}
 		fmt.Printf("Available %d taps\n", currentState.AvailableTaps)
-		if currentState.AvailableTaps >= 1000 {
-			go func() {
-				fmt.Printf("==> Sending %d taps\n", currentState.AvailableTaps)
-				clickerUser, err := clickerClient.Tap(clickerUser.AvailableTaps, 0)
-				if err != nil {
-					fmt.Printf("Error sending taps: %v\n", err)
-					return
-				}
-				updateState(clickerUser)
-			}()
+		if currentState.AvailableTaps >= currentState.TapIfAvailableTaps {
+			Tap()
+
+			if currentState.WantToBuyFullTapsBoost {
+				BuyFullTapsBoost()
+				Tap()
+			}
 		}
 		time.Sleep(3 * time.Second)
+	}
+}
+
+func Tap() {
+	fmt.Printf("==> Sending %d taps\n", currentState.AvailableTaps)
+	clickerUser, err := clickerClient.Tap(currentState.AvailableTaps, 0)
+	if err != nil {
+		fmt.Printf("Error sending taps: %v\n", err)
+		return
+	}
+	currentState.Update(clickerUser)
+}
+
+func checkBoosts() {
+	boosts, err := clickerClient.GetBoostsForBuy()
+	if err == nil {
+		currentState.SetBoosts(boosts)
+	}
+}
+
+func BuyFullTapsBoost() {
+	boostForBuy := currentState.BoostsForBuy[boost.FullTaps]
+
+	if boostForBuy.CooldownSeconds != 0 || boostForBuy.Level > boostForBuy.MaxLevel {
+		return
+	}
+
+	res := make(map[boost.ID]*boost.Boost)
+
+	boosts, err := clickerClient.BuyBoost(boostForBuy)
+	if err != nil {
+		for _, b := range boosts {
+			res[b.Id] = b
+		}
+		currentState.BoostsForBuy = res
+		currentState.AvailableTaps = boostForBuy.MaxTaps
+		currentState.LastSyncUpdate = time.Now().Unix()
+		return
 	}
 }
 
@@ -126,35 +152,10 @@ func BuyUpgrades() {
 				continue
 			}
 			currentState.InterestingUpgradesToBuy = resp.GetInterestingUpgradesAvailableToBuy()
-			updateState(resp.User)
+			currentState.Update(resp.User)
 			fmt.Printf("^^^ Upgraded %s to %d level by price: %s\n", upgradeForBuy.Name, upgradeForBuy.Level, humanize.Comma(upgradeForBuy.Price))
 		}
 	}
-}
-
-func printState() {
-	fmt.Printf(
-		"------\nBalance: %s\nLevel: %d\nMaxTaps: %s\n------\n",
-		humanize.Comma(currentState.Balance),
-		currentState.Level,
-		humanize.Comma(currentState.MaxTaps),
-	)
-	if currentState.InterestingUpgradesToBuy != nil {
-		currentState.InterestingUpgradesToBuy.MinCost.Print("Minimal Cost Upgrade")
-		currentState.InterestingUpgradesToBuy.MaxProfitPerCoin.Print("Max Profit Per Coin Upgrade")
-		currentState.InterestingUpgradesToBuy.MaxProfit.Print("Max Profit Upgrade")
-		fmt.Println("------")
-	}
-	currentState.LastPrintState = time.Now().Unix()
-}
-
-func updateState(clickerUser *user.User) {
-	currentState.AvailableTaps = clickerUser.AvailableTaps
-	currentState.MaxTaps = int64(clickerUser.MaxTaps)
-	currentState.TapsRecoverPerSec = clickerUser.TapsRecoverPerSec
-	currentState.Balance = int64(clickerUser.BalanceCoins)
-	currentState.Level = clickerUser.Level
-	currentState.LastSyncUpdate = clickerUser.LastSyncUpdate
 }
 
 func checkAndBuyUpgrades() {

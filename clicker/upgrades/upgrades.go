@@ -46,7 +46,7 @@ func (r *Upgrade) CanBuy() bool {
 
 func (r *Upgrade) Print(title string) {
 	fmt.Printf(
-		"%s: %s > %s [%d lvl] - %s [+%s per hour]\n",
+		"Upgrade: %s: %s > %s [%d lvl] - %s [+%s per hour]\n",
 		title,
 		r.Section,
 		r.Name,

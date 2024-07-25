@@ -93,7 +93,7 @@ func (c *Client) BuyUpgrade(upgrade *upgrades.Upgrade) (*upgrades.Response, erro
 	}, &upgrades.Response{})
 }
 
-func (c *Client) GetBoostsForBuy() ([]boost.Boost, error) {
+func (c *Client) GetBoostsForBuy() ([]*boost.Boost, error) {
 	boostsForBuy, err := sendRequest(c, boost.ForBuyUri, nil, &boost.BoostsForBuy{})
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (c *Client) GetBoostsForBuy() ([]boost.Boost, error) {
 	return boostsForBuy.Boosts, nil
 }
 
-func (c *Client) BuyBoost(boostForBuy *boost.Boost) ([]boost.Boost, error) {
+func (c *Client) BuyBoost(boostForBuy *boost.Boost) ([]*boost.Boost, error) {
 	boostsForBuy, err := sendRequest(c, boost.BuyUri, &boost.Buy{
 		BoostId:   boostForBuy.Id,
 		Timestamp: time.Now().Unix(),
