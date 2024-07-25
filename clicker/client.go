@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/davehornigan/hamster-kombat-bot/clicker/boost"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/tap"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/upgrades"
 	"github.com/davehornigan/hamster-kombat-bot/clicker/user"
@@ -90,6 +91,27 @@ func (c *Client) BuyUpgrade(upgrade *upgrades.Upgrade) (*upgrades.Response, erro
 		UpgradeId: upgrade.ID,
 		Timestamp: time.Now().Unix(),
 	}, &upgrades.Response{})
+}
+
+func (c *Client) GetBoostsForBuy() ([]*boost.Boost, error) {
+	boostsForBuy, err := sendRequest(c, boost.ForBuyUri, nil, &boost.BoostsForBuy{})
+	if err != nil {
+		return nil, err
+	}
+
+	return boostsForBuy.Boosts, nil
+}
+
+func (c *Client) BuyBoost(boostForBuy *boost.Boost) ([]*boost.Boost, error) {
+	boostsForBuy, err := sendRequest(c, boost.BuyUri, &boost.Buy{
+		BoostId:   boostForBuy.Id,
+		Timestamp: time.Now().Unix(),
+	}, &boost.BoostsForBuy{})
+	if err != nil {
+		return nil, err
+	}
+
+	return boostsForBuy.Boosts, nil
 }
 
 func sendRequest[RP ResponseInterface](c *Client, uri string, reqStruct RequestInterface, resStruct RP) (RP, error) {
