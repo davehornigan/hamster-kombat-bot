@@ -54,11 +54,8 @@ func main() {
 			printer.UpdateDraw()
 		}
 	}()
-	clickerUser, err := clickerClient.Sync()
-	if err != nil {
-		log.Fatal(err)
-	}
-	currentState.Update(clickerUser)
+
+	Sync()
 	checkUpgrades()
 
 	go func() {
@@ -79,6 +76,14 @@ func main() {
 	}()
 
 	select {}
+}
+
+func Sync() {
+	clickerUser, err := clickerClient.Sync()
+	if err != nil {
+		log.Fatal(err)
+	}
+	currentState.Update(clickerUser)
 }
 
 func Tap() {
@@ -105,20 +110,22 @@ func BuyFullTapsBoost() {
 	boostForBuy := currentState.BoostsForBuy[boost.FullTaps]
 
 	if boostForBuy.CooldownSeconds != 0 || boostForBuy.Level > boostForBuy.MaxLevel {
+		go checkBoosts()
 		return
 	}
 
 	res := make(map[boost.ID]*boost.Boost)
 
 	boosts, err := clickerClient.BuyBoost(boostForBuy)
-	if err != nil {
+	if err == nil {
 		for _, b := range boosts {
 			res[b.Id] = b
 		}
 		currentState.BoostsForBuy = res
 		currentState.AvailableTaps = boostForBuy.MaxTaps
 		currentState.LastSyncUpdate = time.Now().Unix()
-		return
+
+		Sync()
 	}
 }
 
